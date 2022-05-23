@@ -1,0 +1,1 @@
+# A Horse racing package to simulator your strategy
