@@ -1,8 +1,10 @@
 
+from dataclasses import dataclass
 from enum import Enum
 import datetime as dt
 import abc
-from typing import Callable, Optional
+from typing import Callable
+import pandas as pd
 
 class TicketType(Enum):
     単勝=1
@@ -14,14 +16,32 @@ class TicketType(Enum):
     三連複=7
     三連単=8
 
+'''
+bet should be int with range (1, inf), and the unit of bet is lot.
+there is a 100 multiplier for each lot, meaning bet 1 lot means bet 100Yen
+'''
 class RaceTicket:
-    def __init__(self, race_id: str, ticket_type: TicketType, pattern: list[int], bet: int = 100) -> None:
+    def __init__(self, race_id: str, ticket_type: TicketType, pattern: list[int], bet: int = 1) -> None:
         self.race_id = race_id
         self.ticket_type = ticket_type
         self.pattern = pattern
         self.bet = bet
         self.content=self._build_pattern_string(ticket_type=ticket_type, pattern=pattern)
     
+    def __str__(self) -> str:
+        return f'Race: {self.race_id}, Type:{self.ticket_type.name}, Patter:{self.content}'
+    
+    def __repr__(self) -> str:
+        return self.__str__()
+    
+    @property
+    def cost(self):
+        return self.bet*100
+
+    @property
+    def ticket_type_str(self):
+        return self.ticket_type.name.replace('三', '3')
+
     @classmethod
     def _build_pattern_string(cls, ticket_type:TicketType, pattern:list[int]) -> str:
         pattern_str = [str(x) for x in pattern]
@@ -40,27 +60,18 @@ class RaceTicket:
     def _build_arrow_pattern(cls, pattern):
         return '→'.join(pattern)
 
+@dataclass
 class SchedEvent:
-    def __init__(self, time:dt.datetime, callback:Callable[[dict], None]) -> None:
+    def __init__(self, time:dt.datetime, callback:Callable[[dict], None], is_before_race = True) -> None:
         self.time = time
         self.callback = callback
+        self.is_before_race = is_before_race
 
 class Service(abc.ABC):
     @abc.abstractmethod
     def buy_ticket(self, ticket:RaceTicket) -> None: 
         raise NotImplementedError("buy ticket must be implemented")
-
-    @abc.abstractmethod
-    def get_result(self, ticket:RaceTicket) -> dict:
-        raise NotImplementedError("get_result must be implemented")
     
-    '''
-    Season end is defined as the first monday after each weekend
-    '''
-    @abc.abstractmethod
-    def is_season_ends(self) -> bool:
-        raise NotImplementedError("get_result must be implemented")
-
     @abc.abstractmethod
     def register_sched_event(self, sched_event: SchedEvent):
         raise NotImplementedError("register_sched_event must be implemented")
@@ -70,12 +81,14 @@ class Service(abc.ABC):
         raise NotImplementedError("get_next_race must be implemented")
 
 
+
 class Paper(Service):
     def __init__(self, 
-                cash:int = 10000, 
-                start=dt.datetime, 
-                end=dt.datetime, 
-                season_end_cra:Optional[Callable[[dt.datetime, dt.datetime], bool]] = None
+                store:pd.HDFStore,  
+                *,
+                start:dt.datetime, 
+                end:dt.datetime, 
+                cash:int = 10000,
                 ) -> None:
         super().__init__()
         self.cash = cash
@@ -83,27 +96,37 @@ class Paper(Service):
         self.events = list()
         self.start = start
         self.end = end
-        self.curr_race_date = start
-        self.next_race_date = start
+
+        # self.__races = pd.read_hdf(store, key='race',table=True, mode='r', where=['date>=start & date<=end'])
+        # self.__result = pd.read_hdf(store, key='result',table=True, mode='r', where=['date>=start & date<=end'])
+        # self.__race_master = pd.read_hdf(store, key='race_master',table=True, mode='r', where=['date>=start & date<=end'])
+        self.__races = pd.read_hdf(store, key='race',table=True, mode='r')
+        self.__result = pd.read_hdf(store, key='result',table=True, mode='r')
+        self.__race_master = pd.read_hdf(store, key='race_master',table=True, mode='r')
+
+        self.__races.sort_values(by=["date","start_time"])
+        self.next_race_id = None
+
+    @property
+    def hist_races(self):
+        return self.__races.loc[self.__races['race_id'] == self.next_race_id] if self.next_race_id else None
+
+    def next_race_time(self):
+        return 
         
-        self.season_end_cra= season_end_cra or self._season_end_cra
-        
+    def get_next_race(self):
+        return 
+
     def buy_ticket(self, ticket: RaceTicket) -> bool:
-        self.cash -= ticket.bet
+        amount =  ticket.bet*100
+        if amount < self.cash:
+            print(f"not enough cash to buy {str(ticket)}") 
+        self.cash -= ticket.bet*100
         return True
     
     def register_sched_event(self, sched_event:SchedEvent):
         self.events.append(sched_event)
-
     
-    @classmethod
-    def _season_end_cra(cls, cur:dt.datetime, next:dt.datetime):
-        tmr= cur+dt.timedelta(days=1)
-        return next> tmr
-    
-    def is_season_ends(self) -> bool:
-        return self.season_end_cra(self.curr_race_date, self.next_race_date)
-
 
 
 class Strategy(abc.ABC):
